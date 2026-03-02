@@ -9,16 +9,20 @@ from __future__ import annotations
 import io
 import json
 import math
-import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_pdf import PdfPages
 import numpy as np
 import pandas as pd
 import requests
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY
+from reportlab.lib.pagesizes import LETTER
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import inch
+from reportlab.platypus import BaseDocTemplate, Frame, Image, PageBreak, PageTemplate, Paragraph, Spacer, Table, TableStyle
 import statsmodels.api as sm
 
 
@@ -427,61 +431,160 @@ def save_figures(
     plt.close(fig4)
 
 
-def df_to_fixed_width_table(df: pd.DataFrame, float_fmt: str = "{:.3f}") -> str:
-    if df.empty:
-        return "No data."
-
-    formatted = df.copy()
-    for col in formatted.columns:
-        if pd.api.types.is_float_dtype(formatted[col]):
-            formatted[col] = formatted[col].map(lambda x: "" if pd.isna(x) else float_fmt.format(x))
-    col_widths = [max(len(str(col)), *(len(str(v)) for v in formatted[col])) for col in formatted.columns]
-    header = " | ".join(str(col).ljust(width) for col, width in zip(formatted.columns, col_widths))
-    sep = "-+-".join("-" * width for width in col_widths)
-    rows = [
-        " | ".join(str(val).ljust(width) for val, width in zip(row, col_widths))
-        for row in formatted.itertuples(index=False, name=None)
-    ]
-    return "\n".join([header, sep, *rows])
+def format_p_value(p_value: float) -> str:
+    return "<0.0001" if p_value < 1e-4 else f"{p_value:.4f}"
 
 
-def add_text_page(pdf: PdfPages, title: str, sections: list[tuple[str, str]]) -> None:
-    fig = plt.figure(figsize=(8.5, 11))
-    fig.patch.set_facecolor("white")
-    fig.text(0.5, 0.965, title, ha="center", va="top", fontsize=17, fontweight="bold")
-    y = 0.92
-    for heading, content in sections:
-        fig.text(0.07, y, heading, ha="left", va="top", fontsize=12.5, fontweight="bold")
-        y -= 0.024
-        wrapped = textwrap.fill(content, width=105)
-        fig.text(0.07, y, wrapped, ha="left", va="top", fontsize=10.5, linespacing=1.35)
-        line_count = wrapped.count("\n") + 1
-        y -= 0.018 * line_count + 0.03
-    pdf.savefig(fig, bbox_inches="tight")
-    plt.close(fig)
+def build_report_styles() -> dict[str, ParagraphStyle]:
+    styles = getSampleStyleSheet()
+    return {
+        "title": ParagraphStyle(
+            "ReportTitle",
+            parent=styles["Title"],
+            fontName="Helvetica-Bold",
+            fontSize=24,
+            leading=30,
+            alignment=TA_CENTER,
+            textColor=colors.HexColor("#16324F"),
+            spaceAfter=16,
+        ),
+        "subtitle": ParagraphStyle(
+            "ReportSubtitle",
+            parent=styles["Normal"],
+            fontName="Helvetica",
+            fontSize=12,
+            leading=16,
+            alignment=TA_CENTER,
+            textColor=colors.HexColor("#334155"),
+            spaceAfter=10,
+        ),
+        "section": ParagraphStyle(
+            "SectionHeading",
+            parent=styles["Heading2"],
+            fontName="Helvetica-Bold",
+            fontSize=14,
+            leading=18,
+            textColor=colors.HexColor("#1E3A5F"),
+            spaceBefore=8,
+            spaceAfter=8,
+        ),
+        "subsection": ParagraphStyle(
+            "SubsectionHeading",
+            parent=styles["Heading3"],
+            fontName="Helvetica-Bold",
+            fontSize=11.2,
+            leading=14,
+            textColor=colors.HexColor("#334155"),
+            spaceBefore=5,
+            spaceAfter=3,
+        ),
+        "body": ParagraphStyle(
+            "BodyTextCustom",
+            parent=styles["BodyText"],
+            fontName="Helvetica",
+            fontSize=10.6,
+            leading=15,
+            alignment=TA_JUSTIFY,
+            textColor=colors.HexColor("#111827"),
+            spaceAfter=7,
+        ),
+        "bullet": ParagraphStyle(
+            "BulletTextCustom",
+            parent=styles["BodyText"],
+            fontName="Helvetica",
+            fontSize=10.6,
+            leading=14,
+            leftIndent=12,
+            bulletIndent=0,
+            textColor=colors.HexColor("#111827"),
+            spaceAfter=4,
+        ),
+        "caption": ParagraphStyle(
+            "FigureCaption",
+            parent=styles["Normal"],
+            fontName="Helvetica-Oblique",
+            fontSize=9.4,
+            leading=12,
+            alignment=TA_CENTER,
+            textColor=colors.HexColor("#374151"),
+            spaceAfter=10,
+        ),
+        "small": ParagraphStyle(
+            "SmallMeta",
+            parent=styles["Normal"],
+            fontName="Helvetica",
+            fontSize=9.4,
+            leading=12,
+            alignment=TA_CENTER,
+            textColor=colors.HexColor("#4B5563"),
+            spaceAfter=4,
+        ),
+    }
 
 
-def add_image_page(pdf: PdfPages, title: str, image_path: Path, caption: str) -> None:
-    fig = plt.figure(figsize=(8.5, 11))
-    fig.patch.set_facecolor("white")
-    fig.text(0.5, 0.965, title, ha="center", va="top", fontsize=16, fontweight="bold")
-    ax = fig.add_axes([0.08, 0.22, 0.84, 0.66])
-    img = plt.imread(image_path)
-    ax.imshow(img)
-    ax.axis("off")
-    fig.text(0.08, 0.14, textwrap.fill(caption, width=115), ha="left", va="top", fontsize=10.5)
-    pdf.savefig(fig, bbox_inches="tight")
-    plt.close(fig)
+def draw_report_page(canvas, doc) -> None:
+    page = canvas.getPageNumber()
+    width, height = LETTER
+    canvas.saveState()
+
+    # Header (starting from page 2 to keep the title page clean)
+    if page > 1:
+        header_y = height - 0.68 * inch
+        canvas.setStrokeColor(colors.HexColor("#D1D5DB"))
+        canvas.setLineWidth(0.8)
+        canvas.line(doc.leftMargin, header_y, width - doc.rightMargin, header_y)
+        canvas.setFillColor(colors.HexColor("#374151"))
+        canvas.setFont("Helvetica", 9)
+        canvas.drawString(
+            doc.leftMargin,
+            height - 0.53 * inch,
+            "Food Insecurity and Youth Depression Risk in the United States",
+        )
+
+    # Footer with page number.
+    canvas.setFillColor(colors.HexColor("#6B7280"))
+    canvas.setFont("Helvetica", 9)
+    canvas.drawRightString(width - doc.rightMargin, 0.5 * inch, f"Page {page}")
+    canvas.restoreState()
 
 
-def add_table_page(pdf: PdfPages, title: str, subtitle: str, table_text: str) -> None:
-    fig = plt.figure(figsize=(8.5, 11))
-    fig.patch.set_facecolor("white")
-    fig.text(0.5, 0.965, title, ha="center", va="top", fontsize=16, fontweight="bold")
-    fig.text(0.08, 0.93, textwrap.fill(subtitle, width=118), ha="left", va="top", fontsize=10.5)
-    fig.text(0.08, 0.88, table_text, family="monospace", fontsize=8.9, ha="left", va="top")
-    pdf.savefig(fig, bbox_inches="tight")
-    plt.close(fig)
+def styled_table(data: list[list[str]], col_widths: list[float]) -> Table:
+    table = Table(data, colWidths=col_widths, hAlign="LEFT", repeatRows=1)
+    table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F3A5F")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, 0), 10),
+                ("ALIGN", (1, 1), (-1, -1), "CENTER"),
+                ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
+                ("FONTSIZE", (0, 1), (-1, -1), 9.3),
+                ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#CBD5E1")),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ]
+        )
+    )
+    return table
+
+
+def add_figure(story: list, image_path: Path, caption: str, styles: dict[str, ParagraphStyle]) -> None:
+    image = Image(str(image_path))
+    max_width = 6.35 * inch
+    max_height = 4.35 * inch
+    scale = min(max_width / image.imageWidth, max_height / image.imageHeight)
+    image.drawWidth = image.imageWidth * scale
+    image.drawHeight = image.imageHeight * scale
+    image.hAlign = "CENTER"
+
+    story.append(image)
+    story.append(Spacer(1, 0.08 * inch))
+    story.append(Paragraph(caption, styles["caption"]))
+    story.append(Spacer(1, 0.15 * inch))
 
 
 def generate_pdf_report(
@@ -492,163 +595,232 @@ def generate_pdf_report(
 ) -> Path:
     report_path = REPORT_DIR / "Food_Insecurity_Youth_Depression_Risk_Ao_Xu_2005_2022.pdf"
     github_link = "https://github.com/bobaoxu2001/Food-insecurity"
+    styles = build_report_styles()
 
     food_row = or_df.loc[or_df["term"] == "food_insecure"].iloc[0]
     food_or = food_row["odds_ratio"]
     food_ci = (food_row["ci_lower"], food_row["ci_upper"])
     food_p = food_row["p_value"]
-    food_p_text = "<0.0001" if food_p < 1e-4 else f"{food_p:.4f}"
+    food_p_text = format_p_value(food_p)
 
-    prevalence_secure = float(prevalence_df.loc[prevalence_df["group"] == "Food secure", "depression_prevalence_weighted"].iloc[0]) * 100
-    prevalence_insecure = float(prevalence_df.loc[prevalence_df["group"] == "Food insecure", "depression_prevalence_weighted"].iloc[0]) * 100
+    prevalence_secure = (
+        float(prevalence_df.loc[prevalence_df["group"] == "Food secure", "depression_prevalence_weighted"].iloc[0]) * 100
+    )
+    prevalence_insecure = (
+        float(prevalence_df.loc[prevalence_df["group"] == "Food insecure", "depression_prevalence_weighted"].iloc[0]) * 100
+    )
 
-    with PdfPages(report_path) as pdf:
-        add_text_page(
-            pdf,
-            "Food Insecurity and Youth Depression Risk in the United States",
+    doc = BaseDocTemplate(
+        str(report_path),
+        pagesize=LETTER,
+        leftMargin=0.85 * inch,
+        rightMargin=0.85 * inch,
+        topMargin=0.95 * inch,
+        bottomMargin=0.75 * inch,
+        title="Food Insecurity and Youth Depression Risk in the United States",
+        author="Ao Xu",
+    )
+    frame = Frame(doc.leftMargin, doc.bottomMargin, doc.width, doc.height, id="main_frame")
+    doc.addPageTemplates([PageTemplate(id="report", frames=[frame], onPage=draw_report_page)])
+
+    story: list = []
+
+    # Cover section.
+    story.append(Spacer(1, 0.8 * inch))
+    story.append(Paragraph("Food Insecurity and Youth Depression Risk in the United States", styles["title"]))
+    story.append(Paragraph("A National Epidemiologic Analysis Using NHANES 2005-2022", styles["subtitle"]))
+    story.append(Paragraph("Author: <b>Ao Xu</b>", styles["small"]))
+    story.append(
+        Paragraph(
+            "Repository: <a href='https://github.com/bobaoxu2001/Food-insecurity'>https://github.com/bobaoxu2001/Food-insecurity</a>",
+            styles["small"],
+        )
+    )
+    story.append(Spacer(1, 0.35 * inch))
+
+    executive_rows = [
+        ["Indicator", "Value"],
+        ["Combined sample (all ages)", f"{summary['n_combined_all_ages']:,}"],
+        ["Youth sample (12-19 years)", f"{summary['n_youth']:,}"],
+        ["Complete-case analytic sample", f"{summary['n_analytic']:,}"],
+        ["Depression prevalence in food-secure youth", f"{prevalence_secure:.1f}%"],
+        ["Depression prevalence in food-insecure youth", f"{prevalence_insecure:.1f}%"],
+        [
+            "Adjusted OR for food insecurity",
+            f"{food_or:.2f} (95% CI {food_ci[0]:.2f}-{food_ci[1]:.2f}), p {food_p_text}",
+        ],
+    ]
+    story.append(styled_table(executive_rows, col_widths=[2.8 * inch, 3.6 * inch]))
+    story.append(Spacer(1, 0.2 * inch))
+    story.append(
+        Paragraph(
+            "Research question: Does household food insecurity increase the risk of depressive symptoms among adolescents and youth in the United States?",
+            styles["body"],
+        )
+    )
+    story.append(PageBreak())
+
+    # Background and methods.
+    story.append(Paragraph("1. Background and Literature Context", styles["section"]))
+    story.append(
+        Paragraph(
+            "Food insecurity is a major social determinant of health linked to both physical and psychological burden. "
+            "Adolescents exposed to unstable household food access may face chronic stress, social strain, and reduced diet quality, "
+            "which can collectively elevate depression risk.",
+            styles["body"],
+        )
+    )
+    story.append(
+        Paragraph(
+            "Prior epidemiologic evidence has reported consistent associations between food insecurity and poor mental health outcomes. "
+            "This report evaluates whether those patterns persist in a pooled, nationally representative U.S. youth sample.",
+            styles["body"],
+        )
+    )
+
+    story.append(Paragraph("2. Data and Study Design", styles["section"]))
+    story.append(
+        Paragraph(
+            f"Data were drawn from the National Health and Nutrition Examination Survey (NHANES), pooled from "
+            f"{summary['cycle_start']} through {summary['cycle_end']} ({summary['n_cycles']} cycles).",
+            styles["body"],
+        )
+    )
+    for bullet in [
+        "Modules merged: DEMO, DPQ (PHQ-9), FSQ, and BMX.",
+        "Target population: youth aged 12-19 years.",
+        "Primary outcome: depressive symptoms (PHQ-9 >= 10).",
+        "Primary exposure: food insecurity (low/very low vs full/marginal).",
+        "Food-security variable harmonization: FSDHH when available, FSDAD otherwise.",
+        "Covariates: age, sex, income-to-poverty ratio, and BMI.",
+    ]:
+        story.append(Paragraph(bullet, styles["bullet"], bulletText="•"))
+
+    story.append(Paragraph("3. Statistical Analysis", styles["section"]))
+    story.append(
+        Paragraph(
+            "Weighted logistic regression was fit as: Depression ~ Food Insecurity + Age + Sex + Income + BMI. "
+            "MEC weights were pooled across cycles and normalized to preserve weighted point estimates while keeping inference stable.",
+            styles["body"],
+        )
+    )
+    story.append(PageBreak())
+
+    # Results narrative and figures.
+    story.append(Paragraph("4. Results", styles["section"]))
+    story.append(
+        Paragraph(
+            f"Food insecurity showed a strong positive association with depressive symptoms "
+            f"(OR {food_or:.2f}, 95% CI {food_ci[0]:.2f}-{food_ci[1]:.2f}, p {food_p_text}). "
+            f"Weighted prevalence was {prevalence_secure:.1f}% among food-secure youth and {prevalence_insecure:.1f}% among food-insecure youth.",
+            styles["body"],
+        )
+    )
+    add_figure(
+        story,
+        FIG_DIR / "food_insecurity_vs_depression_prevalence.png",
+        "Figure 1. Weighted prevalence of depressive symptoms by household food insecurity status.",
+        styles,
+    )
+    add_figure(
+        story,
+        FIG_DIR / "adjusted_or_forest_plot.png",
+        "Figure 2. Forest plot of adjusted odds ratios from the multivariable weighted logistic model.",
+        styles,
+    )
+    story.append(PageBreak())
+    add_figure(
+        story,
+        FIG_DIR / "gender_stratified_prevalence.png",
+        "Figure 3. Weighted depression prevalence by food-security status, stratified by gender.",
+        styles,
+    )
+    add_figure(
+        story,
+        FIG_DIR / "gender_stratified_food_insecurity_or.png",
+        "Figure 4. Gender-stratified adjusted odds ratios for the food insecurity and depression association.",
+        styles,
+    )
+
+    # Regression tables.
+    story.append(PageBreak())
+    story.append(Paragraph("5. Regression Results Tables", styles["section"]))
+    story.append(
+        Paragraph(
+            "Table 1 presents adjusted associations from the pooled weighted logistic model.",
+            styles["body"],
+        )
+    )
+    table1 = [["Predictor", "OR", "95% CI", "p-value"]]
+    for row in or_df.itertuples(index=False):
+        table1.append(
             [
-                ("Author", "Ao Xu"),
-                ("Project repository", github_link),
-                (
-                    "Background",
-                    "Food insecurity is a core social determinant of health. Adolescents exposed to household food insecurity may experience chronic stress, poorer diet quality, and psychosocial strain that contribute to depression risk.",
-                ),
-                (
-                    "Research question",
-                    "Does household food insecurity increase the risk of depressive symptoms among adolescents and youth in the U.S.?",
-                ),
-                (
-                    "Data source",
-                    f"National Health and Nutrition Examination Survey (NHANES), pooled cycles {summary['cycle_start']} to {summary['cycle_end']} ({summary['n_cycles']} cycles), using DEMO, DPQ (PHQ-9), FSQ, and BMX modules.",
-                ),
-            ],
+                row.label,
+                f"{row.odds_ratio:.2f}",
+                f"{row.ci_lower:.2f} to {row.ci_upper:.2f}",
+                format_p_value(row.p_value),
+            ]
         )
+    story.append(styled_table(table1, col_widths=[2.7 * inch, 1.0 * inch, 1.7 * inch, 0.9 * inch]))
+    story.append(Spacer(1, 0.2 * inch))
 
-        add_text_page(
-            pdf,
-            "Literature Review and Methods",
+    story.append(
+        Paragraph(
+            "Table 2 presents gender-stratified adjusted odds ratios for the food insecurity effect.",
+            styles["body"],
+        )
+    )
+    table2 = [["Gender", "N", "OR (Food insecurity)", "95% CI", "p-value"]]
+    for row in strat_or_df.itertuples(index=False):
+        table2.append(
             [
-                (
-                    "Literature review",
-                    "Prior epidemiologic studies consistently report that food insecurity is associated with worse mental health outcomes in both adults and youth. Mechanisms include material deprivation, family stress, and reduced ability to maintain stable healthy routines.",
-                ),
-                (
-                    "Study design",
-                    "Cross-sectional observational analysis using nationally representative NHANES survey data. Primary exposure was food insecurity status (low/very low vs full/marginal), harmonized from FSQ summary variables (FSDHH and, when needed, FSDAD). Primary outcome was moderate-to-severe depressive symptoms (PHQ-9 >= 10).",
-                ),
-                (
-                    "Population",
-                    f"Participants aged 12-19 years. Initial youth sample size: {summary['n_youth']:,}; complete-case analytic sample: {summary['n_analytic']:,}.",
-                ),
-                (
-                    "Covariates",
-                    "Age (years), gender (male vs female), family income-to-poverty ratio (INDFMPIR), and BMI (kg/m^2).",
-                ),
-                (
-                    "Model",
-                    "Weighted logistic regression: Depression ~ Food_Insecurity + Age + Gender + Income + BMI. MEC weights were rescaled by the number of pooled cycles.",
-                ),
-            ],
+                row.gender,
+                f"{int(row.n_unweighted):,}",
+                f"{row.odds_ratio:.2f}",
+                f"{row.ci_lower:.2f} to {row.ci_upper:.2f}",
+                format_p_value(row.p_value),
+            ]
         )
+    story.append(styled_table(table2, col_widths=[1.2 * inch, 0.9 * inch, 1.4 * inch, 1.8 * inch, 1.0 * inch]))
 
-        add_text_page(
-            pdf,
-            "Data Processing and Statistical Analysis",
-            [
-                (
-                    "Data processing",
-                    "Raw NHANES XPT files were downloaded directly from CDC public endpoints and merged by SEQN. PHQ items were cleaned to valid scores (0-3), and records with special missing codes were excluded from complete-case modeling. Food security status used FSDHH when available, with FSDAD harmonized for cycles where FSDHH was not released.",
-                ),
-                (
-                    "Missing-value handling",
-                    "Complete-case analysis was used for outcome, exposure, and covariates in the main model. This approach preserves model interpretability but may introduce selection bias if missingness is not random.",
-                ),
-                (
-                    "Main finding (adjusted association)",
-                    (
-                        f"Food insecurity was associated with higher odds of depressive symptoms: "
-                        f"OR={food_or:.2f}, 95% CI [{food_ci[0]:.2f}, {food_ci[1]:.2f}], p={food_p_text}."
-                    ),
-                ),
-                (
-                    "Prevalence contrast",
-                    (
-                        f"Weighted depression prevalence was {prevalence_secure:.1f}% in food-secure youth versus "
-                        f"{prevalence_insecure:.1f}% in food-insecure youth."
-                    ),
-                ),
-            ],
+    # Discussion and implications.
+    story.append(PageBreak())
+    story.append(Paragraph("6. Discussion and Public Health Implications", styles["section"]))
+    story.append(
+        Paragraph(
+            "This analysis indicates a robust association between household food insecurity and depressive symptoms in U.S. youth. "
+            "The relationship remains substantial after adjustment for age, sex, economic status, and BMI.",
+            styles["body"],
         )
+    )
+    story.append(
+        Paragraph(
+            "From a public health perspective, food access interventions may deliver dual benefits across nutritional and mental health domains. "
+            "Potential policy channels include school meal optimization, targeted food assistance, and family-centered prevention strategies.",
+            styles["body"],
+        )
+    )
 
-        add_image_page(
-            pdf,
-            "Results Figure 1",
-            FIG_DIR / "food_insecurity_vs_depression_prevalence.png",
-            "Figure 1. Weighted prevalence of depressive symptoms by household food insecurity status.",
-        )
-        add_image_page(
-            pdf,
-            "Results Figure 2",
-            FIG_DIR / "adjusted_or_forest_plot.png",
-            "Figure 2. Forest plot of adjusted odds ratios from the multivariable weighted logistic regression.",
-        )
-        add_image_page(
-            pdf,
-            "Results Figure 3",
-            FIG_DIR / "gender_stratified_prevalence.png",
-            "Figure 3. Weighted depression prevalence by food security status, stratified by gender.",
-        )
-        add_image_page(
-            pdf,
-            "Results Figure 4",
-            FIG_DIR / "gender_stratified_food_insecurity_or.png",
-            "Figure 4. Gender-stratified adjusted odds ratios for the association between food insecurity and depression.",
-        )
+    story.append(Paragraph("7. Limitations and Future Research", styles["section"]))
+    for bullet in [
+        "Cross-sectional NHANES design limits causal interpretation.",
+        "Complete-case analysis can introduce bias under non-random missingness.",
+        "Residual confounding and measurement error remain possible.",
+        "Future work should test mediation pathways and longitudinal relationships.",
+    ]:
+        story.append(Paragraph(bullet, styles["bullet"], bulletText="•"))
 
-        main_table = or_df[["label", "odds_ratio", "ci_lower", "ci_upper", "p_value"]].copy()
-        main_table.columns = ["Predictor", "OR", "CI_Lower", "CI_Upper", "p_value"]
-        add_table_page(
-            pdf,
-            "Key Regression Estimates",
-            "Adjusted odds ratios from the weighted multivariable logistic model.",
-            df_to_fixed_width_table(main_table, float_fmt="{:.4f}"),
+    story.append(Spacer(1, 0.15 * inch))
+    story.append(Paragraph("Reproducibility", styles["subsection"]))
+    story.append(
+        Paragraph(
+            f"All code, data-processing scripts, tables, and figures are available in the project repository: "
+            f"<a href='{github_link}'>{github_link}</a>.",
+            styles["body"],
         )
+    )
 
-        strat_table = strat_or_df[["gender", "n_unweighted", "odds_ratio", "ci_lower", "ci_upper", "p_value"]].copy()
-        strat_table.columns = ["Gender", "N", "OR_FoodInsecure", "CI_Lower", "CI_Upper", "p_value"]
-        add_table_page(
-            pdf,
-            "Gender-Stratified Model",
-            "Association between food insecurity and depression within each gender stratum.",
-            df_to_fixed_width_table(strat_table, float_fmt="{:.4f}"),
-        )
-
-        add_text_page(
-            pdf,
-            "Discussion, Implications, and Future Research",
-            [
-                (
-                    "Discussion",
-                    "The analysis indicates a robust positive association between household food insecurity and depressive symptoms among U.S. youth, even after adjustment for demographics and socioeconomic indicators.",
-                ),
-                (
-                    "Public health implications",
-                    "Policies that reduce household food insecurity (SNAP optimization, school meal access, and targeted community food support) may provide mental health benefits in addition to nutritional gains.",
-                ),
-                (
-                    "Limitations",
-                    "Cross-sectional NHANES design cannot establish causality. Complete-case analysis may introduce bias. Residual confounding and measurement error remain possible.",
-                ),
-                (
-                    "Future research",
-                    "Future work should test longitudinal pathways, mediation through diet quality and family stress, and effect modification by race/ethnicity, geography, and social support.",
-                ),
-                (
-                    "Reproducibility",
-                    f"All code, scripts, and outputs are reproducible from the project repository: {github_link}",
-                ),
-            ],
-        )
+    doc.build(story)
     return report_path
 
 
