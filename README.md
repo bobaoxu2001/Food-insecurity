@@ -3,17 +3,14 @@
 Author: **Ao Xu**  
 Repository: https://github.com/bobaoxu2001/Food-insecurity
 
-## Project Goal / 研究目标
+## Project Objective
 
 **Research question:**  
 Does household food insecurity increase the risk of depressive symptoms among adolescents and youth in the United States?
 
-**中文问题：**  
-美国家庭食物不安全是否会显著增加青少年抑郁症状风险？
-
 ---
 
-## Data Source / 数据来源
+## Data Source
 
 Primary source: **NHANES (CDC)**  
 https://www.cdc.gov/nchs/nhanes/
@@ -29,31 +26,31 @@ Pooled cycles used in this project:
 - 2021-2022
 
 Modules merged:
-- DEMO (demographics + income + weights)
+- DEMO (demographics, income, and survey weights)
 - DPQ (PHQ-9 depression screening)
 - FSQ (food security)
 - BMX (BMI)
 
-> Note: FSQ food-security status uses `FSDHH` when available, and `FSDAD` for cycles where `FSDHH` is not released.
+Note: food-security status uses `FSDHH` when available and `FSDAD` for cycles where `FSDHH` is not released.
 
 ---
 
-## Methods / 方法
+## Methods
 
 1. **Data cleaning**
-   - Merge by `SEQN`
-   - Restrict to youth aged 12-19
+   - Merge all modules by `SEQN`
+   - Restrict to youth ages 12-19
    - Construct depression outcome: `PHQ-9 >= 10`
-   - Construct food insecurity binary: low/very low vs full/marginal
-   - Handle missing values via complete-case modeling
-   - Apply pooled-cycle MEC weights (advanced weighting)
+   - Construct binary food insecurity: low/very low vs full/marginal
+   - Handle missing values with complete-case modeling
+   - Apply pooled-cycle MEC weighting
 
 2. **Statistical model**
    - Weighted logistic regression:
      - `Depression ~ Food_Insecurity + Age + Gender + Income + BMI`
-   - Output:
+   - Outputs:
      - Odds Ratio (OR)
-     - 95% CI
+     - 95% confidence interval
      - p-value
 
 3. **Visualization**
@@ -63,7 +60,7 @@ Modules merged:
 
 ---
 
-## Reproducible Run / 一键运行
+## Reproducible Run
 
 ### 1) Install dependencies
 
@@ -71,43 +68,39 @@ Modules merged:
 python3 -m pip install --upgrade pip pandas statsmodels matplotlib seaborn scipy requests
 ```
 
-### 2) Run full pipeline
+### 2) Run the full pipeline
 
 ```bash
 python3 scripts/run_project.py
 ```
 
-This script will automatically:
-- Download NHANES XPT files
-- Clean and merge data
-- Fit models
-- Export tables and figures
-- Generate final PDF report
+This script automatically:
+- Downloads NHANES XPT files
+- Cleans and merges data
+- Fits weighted logistic models
+- Exports tables and figures
+- Generates the final PDF report
 
 ---
 
-## Key Outputs / 主要产物
+## Key Outputs
 
 - Final report PDF  
   `report/Food_Insecurity_Youth_Depression_Risk_Ao_Xu_2005_2022.pdf`
-
-- Processed analytic datasets  
+- Processed datasets  
   `data/processed/`
-
-- Regression & prevalence tables  
+- Tables  
   `outputs/tables/`
-
-- Figures (prevalence, forest plot, stratified plots)  
+- Figures  
   `outputs/figures/`
-
-- Optional SQL merge template  
+- SQL merge template  
   `sql/merge_nhanes_template.sql`
 
 ---
 
-## Current Run Snapshot / 当前运行结果摘要
+## Current Run Snapshot
 
-From the latest full run:
+From the latest run:
 - Combined sample (all ages): **82,123**
 - Youth sample (12-19): **11,659**
 - Complete-case analytic sample: **2,081**
@@ -121,9 +114,27 @@ From the latest full run:
 
 ---
 
-## Writing Sample Structure / 报告结构
+## Key Figures
 
-The generated PDF follows:
+### Figure 1. Depression prevalence by food insecurity
+![Food insecurity vs depression prevalence](outputs/figures/food_insecurity_vs_depression_prevalence.png)
+
+### Figure 2. Adjusted odds-ratio forest plot
+![Adjusted OR forest plot](outputs/figures/adjusted_or_forest_plot.png)
+
+### Figure 3. Gender-stratified prevalence
+![Gender stratified prevalence](outputs/figures/gender_stratified_prevalence.png)
+
+### Figure 4. Gender-stratified food insecurity effect
+![Gender stratified OR](outputs/figures/gender_stratified_food_insecurity_or.png)
+
+These same figures are also included in the PDF report.
+
+---
+
+## Report Structure
+
+The generated PDF includes:
 - Background
 - Literature Review
 - Methods
