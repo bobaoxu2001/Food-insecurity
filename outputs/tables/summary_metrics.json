@@ -1,0 +1,10 @@
+{
+  "n_cycles": 8,
+  "cycle_start": "2005-2006",
+  "cycle_end": "2021-2022",
+  "n_combined_all_ages": 82123,
+  "n_youth": 11659,
+  "n_analytic": 2081,
+  "weighted_depression_prevalence_overall": 0.09022821707498789,
+  "weighted_food_insecurity_prevalence": 0.19825226536700571
+}

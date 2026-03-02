@@ -1,0 +1,5 @@
+gender,group,n_unweighted,depression_prevalence_weighted
+Female,Food secure,758,0.09200177309124209
+Female,Food insecure,249,0.16952487604752625
+Male,Food secure,793,0.050473535992510775
+Male,Food insecure,281,0.17524157048742955
